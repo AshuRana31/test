@@ -1,0 +1,22 @@
+# Project Information
+project_name = "example-project"
+client_name  = "example-client"
+environment  = "Development"
+
+# Region and Availability Zones
+region             = "ap-southeast-2"
+availability_zones = ["ap-southeast-2a", "ap-southeast-2b"]
+
+# VPC Configuration
+vpc_naming_convention = "${client}-${env}-vpc"
+vpc_cidr             = "10.0.0.0/16"
+
+# Subnet Configuration
+create_public_subnets  = true
+create_private_subnets = true
+subnets_per_type      = 2
+
+# Optional Features
+create_internet_gateway = true
+create_nat_gateway     = false
+enable_vpc_flow_logs   = false

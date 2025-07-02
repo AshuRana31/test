@@ -1,0 +1,17 @@
+variable "project_name" {}
+variable "client_name" {}
+variable "region" {}
+variable "vpc_cidr" {}
+variable "availability_zones" {}
+variable "vpc_naming_convention" {}
+variable "subnet_types" {}
+variable "subnets_per_type" {}
+variable "requires_internet_gateway" {}
+variable "enable_nat_gateway" {}
+variable "enable_vpc_flow_logs" {}
+variable "enable_vpc_peering" {}
+variable "custom_dhcp_options" {}
+variable "dhcp_domain_name" {}
+variable "dhcp_domain_name_servers" {}
+variable "peer_vpc_id" {}
+variable "peer_vpc_cidr" {}
