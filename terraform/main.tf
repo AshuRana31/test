@@ -13,9 +13,11 @@ terraform {
   }
   
   backend "s3" {
-    # Backend configuration will be provided via init command
-    # Standard naming: {account-id}-terraform-state-{region}
-    # Example: 123456789012-terraform-state-us-east-1
+    bucket         = "terraform-state-ashurana31-test-1751878362"
+    key            = "terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-locks-ashurana31-test"
+    encrypt        = true
   }
 }
 
