@@ -13,7 +13,7 @@ terraform {
   }
   
   backend "s3" {
-    bucket         = "terraform-state-ashurana31-test-1751878362"
+    bucket         = "terraform-state-ashurana31-test-1751878282"
     key            = "terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "terraform-locks-ashurana31-test"
@@ -23,6 +23,10 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+
+  assume_role {
+    role_arn = "arn:aws:iam::038751964618:role/GitHubActionsRole"
+  }
   
   default_tags {
     tags = {
@@ -31,45 +35,4 @@ provider "aws" {
       Project     = "backstage-template"
     }
   }
-}
-
-# Example S3 bucket resource
-resource "aws_s3_bucket" "example" {
-  bucket = "${var.aws_account_id}-example-bucket-${random_id.bucket_suffix.hex}"
-  
-  tags = {
-    Name        = "Example Bucket"
-    Description = "Created by Backstage Terraform template"
-  }
-}
-
-resource "aws_s3_bucket_versioning" "example" {
-  bucket = aws_s3_bucket.example.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "example" {
-  bucket = aws_s3_bucket.example.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-    bucket_key_enabled = true
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "example" {
-  bucket = aws_s3_bucket.example.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "random_id" "bucket_suffix" {
-  byte_length = 4
 }
