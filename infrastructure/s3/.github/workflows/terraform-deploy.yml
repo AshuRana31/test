@@ -1,0 +1,451 @@
+name: 'Terraform CI/CD Pipeline'
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'infrastructure/**'
+      - '.github/workflows/terraform-deploy.yml'
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'infrastructure/**'
+      - '.github/workflows/terraform-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  TF_VERSION: '1.5.0'
+  AWS_REGION: 'us-east-1'
+  BUCKET_NAME: 'test-backstage-ashurana31'
+  ENVIRONMENT: 'dev'
+  ACCOUNT_ID: '038751964618'
+
+permissions:
+  id-token: write      # Required for OIDC authentication
+  contents: read       # Required to checkout code
+  pull-requests: write # Required to comment on PRs
+  issues: write        # Required to create issue comments
+
+jobs:
+  # Job 1: Terraform Plan (runs on PRs and manual dispatch)
+  terraform-plan:
+    name: '🔍 Terraform Plan'
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+    
+    outputs:
+      plan-exitcode: 
+      plan-output: 
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 
+          terraform_wrapper: false
+
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam:::role/GitHubActionsRole
+          role-session-name: GitHubActions-TerraformPlan-
+          aws-region: 
+          mask-aws-account-id: false
+
+      - name: 🧪 Verify AWS Connection
+        run: |
+          echo "🔍 Verifying AWS connection..."
+          aws sts get-caller-identity
+          echo "✅ AWS connection verified"
+
+      - name: 📋 Setup Terraform Backend
+        run: |
+          echo "🔧 Setting up Terraform backend configuration..."
+          cat > backend.tf << EOF
+          terraform {
+            backend "s3" {
+              bucket         = "-terraform-state-"
+              key            = "s3//terraform.tfstate"
+              region         = ""
+              encrypt        = true
+              dynamodb_table = "-terraform-locks"
+            }
+          }
+          EOF
+          echo "✅ Backend configuration created"
+        working-directory: ./infrastructure/s3
+
+      - name: 🎨 Terraform Format Check
+        id: fmt
+        run: |
+          echo "🎨 Checking Terraform formatting..."
+          terraform fmt -check -recursive -diff
+          echo "✅ Format check completed"
+        working-directory: ./infrastructure/s3
+        continue-on-error: true
+
+      - name: ⚙️ Terraform Init
+        id: init
+        run: |
+          echo "⚙️ Initializing Terraform..."
+          terraform init -input=false
+          echo "✅ Terraform initialized successfully"
+        working-directory: ./infrastructure/s3
+
+      - name: 🔍 Terraform Validate
+        id: validate
+        run: |
+          echo "🔍 Validating Terraform configuration..."
+          terraform validate -no-color
+          echo "✅ Terraform configuration is valid"
+        working-directory: ./infrastructure/s3
+
+      - name: 📊 Terraform Plan
+        id: plan
+        run: |
+          echo "📊 Creating Terraform plan..."
+          terraform plan -no-color -input=false -detailed-exitcode \
+            -var="bucket_name=" \
+            -var="environment=" \
+            -var="versioning_enabled=true" \
+            -var="additional_tags={}" \
+            -out=tfplan 2>&1 | tee plan_output.txt
+          
+          # Capture exit code
+          PLAN_EXIT_CODE=${PIPESTATUS[0]}
+          echo "exitcode=$PLAN_EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          # Save plan output
+          echo "stdout<<EOF" >> $GITHUB_OUTPUT
+          cat plan_output.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "✅ Terraform plan completed with exit code: $PLAN_EXIT_CODE"
+          exit $PLAN_EXIT_CODE
+        working-directory: ./infrastructure/s3
+        continue-on-error: true
+
+      - name: 📝 Generate Plan Summary
+        id: summary
+        if: always()
+        run: |
+          echo "📝 Generating plan summary..."
+          
+          # Determine plan status
+          if [ "" == "0" ]; then
+            PLAN_STATUS="✅ No changes"
+            PLAN_EMOJI="✅"
+          elif [ "" == "2" ]; then
+            PLAN_STATUS="📋 Changes detected"
+            PLAN_EMOJI="📋"
+          else
+            PLAN_STATUS="❌ Plan failed"
+            PLAN_EMOJI="❌"
+          fi
+          
+          echo "plan_status=$PLAN_STATUS" >> $GITHUB_OUTPUT
+          echo "plan_emoji=$PLAN_EMOJI" >> $GITHUB_OUTPUT
+
+      - name: 💬 Comment on Pull Request
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: 
+          script: |
+            const planOutput = ``;
+            const planStatus = ``;
+            const planEmoji = ``;
+            
+            const output = `## ${planEmoji} Terraform Plan Results
+            
+            **Status:** ${planStatus}
+            **Environment:** \`\`
+            **S3 Bucket:** \`\`
+            **Region:** \`\`
+            
+            ### 📋 Plan Details
+            
+            | Step | Status |
+            |------|--------|
+            | 🎨 Format | \`\` |
+            | ⚙️ Init | \`\` |
+            | 🔍 Validate | \`\` |
+            | 📊 Plan | \`\` |
+            
+            <details>
+            <summary>📖 Show Terraform Plan Output</summary>
+            
+            \`\`\`hcl
+            ${planOutput}
+            \`\`\`
+            
+            </details>
+            
+            ---
+            
+            **Next Steps:**
+            - ✅ If plan looks good, merge this PR to apply changes
+            - 🔄 If changes needed, push new commits to update the plan
+            - ❌ If plan failed, check the logs and fix issues
+            
+            *Plan generated by: @ | Action: \`\`*
+            `;
+            
+            // Find existing comment to update or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && comment.body.includes('Terraform Plan Results')
+            );
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: output
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: output
+              });
+            }
+
+      - name: 📤 Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        if: steps.plan.outcome == 'success'
+        with:
+          name: terraform-plan-
+          path: |
+            infrastructure/s3/tfplan
+            infrastructure/s3/plan_output.txt
+          retention-days: 30
+
+      - name: ❌ Fail on Plan Error
+        if: steps.plan.outputs.exitcode == '1'
+        run: |
+          echo "❌ Terraform plan failed with errors"
+          exit 1
+
+  # Job 2: Terraform Apply (runs on main branch push or manual dispatch)
+  terraform-apply:
+    name: '🚀 Terraform Apply'
+    runs-on: ubuntu-latest
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+    needs: [terraform-plan]
+    
+    environment:
+      name: 
+      url: https://console.aws.amazon.com/s3/buckets/
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 
+          terraform_wrapper: false
+
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam:::role/GitHubActionsRole
+          role-session-name: GitHubActions-TerraformApply-
+          aws-region: 
+
+      - name: 📋 Setup Terraform Backend
+        run: |
+          cat > backend.tf << EOF
+          terraform {
+            backend "s3" {
+              bucket         = "-terraform-state-"
+              key            = "s3//terraform.tfstate"
+              region         = ""
+              encrypt        = true
+              dynamodb_table = "-terraform-locks"
+            }
+          }
+          EOF
+        working-directory: ./infrastructure/s3
+
+      - name: ⚙️ Terraform Init
+        run: terraform init -input=false
+        working-directory: ./infrastructure/s3
+
+      - name: 🚀 Terraform Apply
+        id: apply
+        run: |
+          echo "🚀 Applying Terraform configuration..."
+          terraform apply -auto-approve -input=false \
+            -var="bucket_name=" \
+            -var="environment=" \
+            -var="versioning_enabled=true" \
+            -var="additional_tags={}"
+          echo "✅ Terraform apply completed successfully"
+        working-directory: ./infrastructure/s3
+
+      - name: 📊 Get Terraform Outputs
+        id: output
+        run: |
+          echo "📊 Retrieving Terraform outputs..."
+          terraform output -json > outputs.json
+          echo "outputs<<EOF" >> $GITHUB_OUTPUT
+          cat outputs.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        working-directory: ./infrastructure/s3
+
+      - name: 🎉 Post Success Comment
+        uses: actions/github-script@v7
+        if: success()
+        with:
+          github-token: 
+          script: |
+            const outputs = JSON.parse(``);
+            
+            let outputsTable = "| Output | Value |\n|--------|-------|\n";
+            for (const [key, value] of Object.entries(outputs)) {
+              outputsTable += `| \`${key}\` | \`${value.value}\` |\n`;
+            }
+            
+            const successMessage = `## 🎉 Terraform Apply Successful!
+            
+            **✅ S3 Infrastructure Deployed Successfully**
+            
+            **📋 Deployment Details:**
+            - **Bucket Name:** \`\`
+            - **Environment:** \`\`
+            - **Region:** \`\`
+            - **Versioning:** \`true\`
+            
+            **📊 Terraform Outputs:**
+            ${outputsTable}
+            
+            **🔗 Quick Links:**
+            - [S3 Console](https://console.aws.amazon.com/s3/buckets/)
+            - [CloudFormation Stack](https://console.aws.amazon.com/cloudformation/home?region=)
+            
+            *Applied by: @ | Commit: \`\`*
+            `;
+            
+            // Find the most recent merged PR and comment on it
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              sort: 'updated',
+              direction: 'desc',
+              per_page: 5
+            });
+            
+            const recentMergedPR = prs.find(pr => pr.merged_at && 
+              new Date(pr.merged_at) > new Date(Date.now() - 10 * 60 * 1000) // Within last 10 minutes
+            );
+            
+            if (recentMergedPR) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: recentMergedPR.number,
+                body: successMessage
+              });
+            }
+
+  # Job 3: Terraform Destroy (manual only)
+  terraform-destroy:
+    name: '🗑️ Terraform Destroy'
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+    
+    environment:
+      name: -destroy
+      url: https://console.aws.amazon.com/s3/
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 
+
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam:::role/GitHubActionsRole
+          role-session-name: GitHubActions-TerraformDestroy-
+          aws-region: 
+
+      - name: 📋 Setup Terraform Backend
+        run: |
+          cat > backend.tf << EOF
+          terraform {
+            backend "s3" {
+              bucket         = "-terraform-state-"
+              key            = "s3//terraform.tfstate"
+              region         = ""
+              encrypt        = true
+              dynamodb_table = "-terraform-locks"
+            }
+          }
+          EOF
+        working-directory: ./infrastructure/s3
+
+      - name: ⚙️ Terraform Init
+        run: terraform init -input=false
+        working-directory: ./infrastructure/s3
+
+      - name: 📊 Terraform Plan Destroy
+        run: |
+          terraform plan -destroy -no-color -input=false \
+            -var="bucket_name=" \
+            -var="environment=" \
+            -var="versioning_enabled=true" \
+            -var="additional_tags={}"
+        working-directory: ./infrastructure/s3
+
+      - name: 🗑️ Terraform Destroy
+        run: |
+          echo "🗑️ Destroying Terraform infrastructure..."
+          terraform destroy -auto-approve -input=false \
+            -var="bucket_name=" \
+            -var="environment=" \
+            -var="versioning_enabled=true" \
+            -var="additional_tags={}"
+          echo "✅ Infrastructure destroyed successfully"
+        working-directory: ./infrastructure/s3
