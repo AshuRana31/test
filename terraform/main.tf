@@ -18,7 +18,6 @@ terraform {
     region         = "us-east-1"
     dynamodb_table = "terraform-locks-ashurana31-test"
     encrypt        = true
-    role_arn       = "arn:aws:iam::038751964618:role/GitHubActionsRole"
   }
 
 }
