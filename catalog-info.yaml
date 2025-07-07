@@ -1,0 +1,11 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: terraform-infrastructure
+  description: Terraform infrastructure with GitHub Actions
+  annotations:
+    github.com/project-slug: terraform-infrastructure
+spec:
+  type: infrastructure
+  lifecycle: production
+  owner: Platform Team
