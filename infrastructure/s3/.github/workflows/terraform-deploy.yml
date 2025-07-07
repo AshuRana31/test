@@ -1,0 +1,279 @@
+name: 'Terraform Deploy'
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'infrastructure/**'
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'infrastructure/**'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  TF_VERSION: '1.5.0'
+  AWS_REGION: 'us-east-1'
+
+permissions:
+  id-token: write   # Required for OIDC
+  contents: read    # Required to checkout code
+  pull-requests: write  # Required to comment on PRs
+
+jobs:
+  terraform-plan:
+    name: 'Terraform Plan'
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+    
+    strategy:
+      matrix:
+        # Find all infrastructure directories
+        include:
+          - path: infrastructure/s3
+            environment: dev
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam:::role/GitHubActionsRole
+          role-session-name: GitHubActions-TerraformPlan
+          aws-region: 
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        working-directory: 
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init \
+            -backend-config="bucket=" \
+            -backend-config="key=/terraform.tfstate" \
+            -backend-config="region=" \
+            -backend-config="encrypt=true" \
+            -backend-config="dynamodb_table="
+        working-directory: 
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+        working-directory: 
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -input=false -out=tfplan \
+            -var="account_id=" \
+            -var="region="
+        working-directory: 
+        continue-on-error: true
+
+      - name: Update Pull Request
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "terraform\n"
+        with:
+          github-token: 
+          script: |
+            const output = `#### Terraform Format and Style 🖌\`\`
+            #### Terraform Initialization ⚙️\`\`
+            #### Terraform Validation 🤖\`\`
+            #### Terraform Plan 📖\`\`
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`\n
+            ${process.env.PLAN}
+            \`\`\`
+            
+            </details>
+            
+            *Pushed by: @, Action: \`\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  terraform-apply:
+    name: 'Terraform Apply'
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+    needs: [terraform-plan]
+    
+    strategy:
+      matrix:
+        include:
+          - path: infrastructure/s3
+            environment: dev
+    
+    environment:
+      name: 
+      url: https://console.aws.amazon.com/s3/
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam:::role/GitHubActionsRole
+          role-session-name: GitHubActions-TerraformApply
+          aws-region: 
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=" \
+            -backend-config="key=/terraform.tfstate" \
+            -backend-config="region=" \
+            -backend-config="encrypt=true" \
+            -backend-config="dynamodb_table="
+        working-directory: 
+
+      - name: Terraform Apply
+        run: |
+          terraform apply -auto-approve -input=false \
+            -var="account_id=" \
+            -var="region="
+        working-directory: 
+
+      - name: Terraform Output
+        id: output
+        run: terraform output -json
+        working-directory: 
+
+      - name: Comment PR with Results
+        uses: actions/github-script@v7
+        if: github.event_name == 'push'
+        with:
+          github-token: 
+          script: |
+            const output = `#### Terraform Apply Completed ✅
+            
+            **Infrastructure deployed successfully!**
+            
+            **Outputs:**
+            \`\`\`json
+            
+            \`\`\`
+            
+            *Applied by: @*`;
+            
+            // Find the most recent merged PR
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              sort: 'updated',
+              direction: 'desc',
+              per_page: 1
+            });
+            
+            if (prs.length > 0 && prs[0].merged_at) {
+              await github.rest.issues.createComment({
+                issue_number: prs[0].number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+              });
+            }
+
+  terraform-destroy:
+    name: 'Terraform Destroy'
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+    
+    strategy:
+      matrix:
+        include:
+          - path: infrastructure/s3
+            environment: dev
+    
+    environment:
+      name: -destroy
+      url: https://console.aws.amazon.com/s3/
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam:::role/GitHubActionsRole
+          role-session-name: GitHubActions-TerraformDestroy
+          aws-region: 
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=" \
+            -backend-config="key=/terraform.tfstate" \
+            -backend-config="region=" \
+            -backend-config="encrypt=true" \
+            -backend-config="dynamodb_table="
+        working-directory: 
+
+      - name: Terraform Plan Destroy
+        run: |
+          terraform plan -destroy -no-color -input=false \
+            -var="account_id=" \
+            -var="region="
+        working-directory: 
+
+      - name: Terraform Destroy
+        run: |
+          terraform destroy -auto-approve -input=false \
+            -var="account_id=" \
+            -var="region="
+        working-directory: 

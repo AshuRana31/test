@@ -1,0 +1,237 @@
+name: 'Multi-Environment Terraform Deploy'
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'release/*'
+    paths:
+      - 'infrastructure/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'infrastructure/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      action:
+        description: 'Terraform action'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+env:
+  TF_VERSION: '1.5.0'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  determine-environment:
+    name: 'Determine Target Environment'
+    runs-on: ubuntu-latest
+    outputs:
+      environment: 
+      account_id: 
+      aws_region: 
+    
+    steps:
+      - name: Determine Environment
+        id: env
+        run: |
+          if [ "" = "workflow_dispatch" ]; then
+            ENV=""
+          elif [ "" = "refs/heads/main" ]; then
+            ENV="prod"
+          elif [ "" = "refs/heads/develop" ]; then
+            ENV="staging"
+          elif [[ "" == refs/heads/release/* ]]; then
+            ENV="staging"
+          else
+            ENV="dev"
+          fi
+          
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          
+          # Set account ID and region based on environment
+          case $ENV in
+            "dev")
+              echo "account_id=038751964618" >> $GITHUB_OUTPUT
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              ;;
+            "staging")
+              echo "account_id=038751964618" >> $GITHUB_OUTPUT
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              ;;
+            "prod")
+              echo "account_id=038751964618" >> $GITHUB_OUTPUT
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              ;;
+          esac
+          
+          echo "🎯 Target Environment: $ENV"
+
+  terraform-plan:
+    name: 'Terraform Plan'
+    runs-on: ubuntu-latest
+    needs: [determine-environment]
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+    
+    strategy:
+      matrix:
+        include:
+          - path: infrastructure/s3
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::NaN:role/GitHubActionsRole
+          role-session-name: GitHubActions-Plan-NaN
+          aws-region: NaN
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=" \
+            -backend-config="key=NaN//terraform.tfstate" \
+            -backend-config="region=NaN" \
+            -backend-config="encrypt=true" \
+            -backend-config="dynamodb_table="
+        working-directory: 
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -input=false -out=tfplan \
+            -var="account_id=NaN" \
+            -var="region=NaN" \
+            -var="environment=NaN"
+        working-directory: 
+
+      - name: Update Pull Request
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "terraform\n"
+        with:
+          github-token: 
+          script: |
+            const output = `## Terraform Plan - NaN Environment
+            
+            **Target Account:** \`NaN\`
+            **Region:** \`NaN\`
+            **Path:** \`\`
+            
+            #### Terraform Plan 📖\`\`
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`\n
+            ${process.env.PLAN}
+            \`\`\`
+            
+            </details>
+            
+            *Pushed by: @*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  terraform-apply:
+    name: 'Terraform Apply'
+    runs-on: ubuntu-latest
+    needs: [determine-environment]
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      (github.ref == 'refs/heads/develop' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+    
+    strategy:
+      matrix:
+        include:
+          - path: infrastructure/s3
+    
+    environment:
+      name: NaN
+      url: https://NaN.signin.aws.amazon.com/console
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::NaN:role/GitHubActionsRole
+          role-session-name: GitHubActions-Apply-NaN
+          aws-region: NaN
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=" \
+            -backend-config="key=NaN//terraform.tfstate" \
+            -backend-config="region=NaN" \
+            -backend-config="encrypt=true" \
+            -backend-config="dynamodb_table="
+        working-directory: 
+
+      - name: Terraform Apply
+        run: |
+          terraform apply -auto-approve -input=false \
+            -var="account_id=NaN" \
+            -var="region=NaN" \
+            -var="environment=NaN"
+        working-directory: 
+
+      - name: Terraform Output
+        id: output
+        run: terraform output -json
+        working-directory: 
+
+      - name: Deployment Summary
+        run: |
+          echo "🎉 Deployment Complete!"
+          echo ""
+          echo "📋 Deployment Summary:"
+          echo "- Environment: NaN"
+          echo "- Account: NaN"
+          echo "- Region: NaN"
+          echo "- Path: "
+          echo ""
+          echo "📊 Terraform Outputs:"
+          echo '' | jq -r 'to_entries[] | "- \(.key): \(.value.value)"'
